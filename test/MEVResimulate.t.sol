@@ -34,9 +34,9 @@ contract MEVResimulateTest is Test {
 
     // Token amounts from tx (18 decimals assumed for precision)
     uint256 constant INPUT_TOKEN_AMOUNT = 17_169_169_459_862_071_375; // ~17.17
-    uint256 constant UNISWAP_V2_OUTPUT = 530_916_054_946_304_482;    // ~0.53
-    uint256 constant WETH_INPUT = 562_611_020_353_505_727;           // ~0.56 WETH
-    uint256 constant EMP_OUTPUT = 17_975_419_691_953_642_945;       // ~17.97 EMP
+    uint256 constant UNISWAP_V2_OUTPUT = 530_916_054_946_304_482; // ~0.53
+    uint256 constant WETH_INPUT = 562_611_020_353_505_727; // ~0.56 WETH
+    uint256 constant EMP_OUTPUT = 17_975_419_691_953_642_945; // ~17.97 EMP
 
     function setUp() public {}
 
@@ -104,12 +104,12 @@ contract MEVResimulateTest is Test {
 
     // --- Task 7: Re-simulate with same input, same pools, verify output ---
 
-    address constant TOKEN_IN = 0x4343A06B930Cf7Ca0459153C62CC5a47582099E1;  // pEMP
+    address constant TOKEN_IN = 0x4343A06B930Cf7Ca0459153C62CC5a47582099E1; // pEMP
     address constant TOKEN_V2_OUT = 0x395dA89bDb9431621A75DF4e2E3B993Acc2CaB3D;
     address constant BUILDERNET = 0xdadB0d80178819F2319190D340ce9A924f783711;
-    uint256 constant USER_AMOUNT = 6435308948727846;        // 原 tx: MEV bot → User gross 0.006435308948727846 ETH
-    uint256 constant USER_NET = 5969877670159834;           // User net (gross - gas, vm.transact 时 balance delta)
-    uint256 constant BUILDERNET_AMOUNT = 593974446933372;  // 原 tx: BuilderNet 收到 0.000593974446933372 ETH
+    uint256 constant USER_AMOUNT = 6435308948727846; // 原 tx: MEV bot → User gross 0.006435308948727846 ETH
+    uint256 constant USER_NET = 5969877670159834; // User net (gross - gas, vm.transact 时 balance delta)
+    uint256 constant BUILDERNET_AMOUNT = 593974446933372; // 原 tx: BuilderNet 收到 0.000593974446933372 ETH
 
     /**
      * Task 7: Verify replayed tx produces same output
@@ -142,12 +142,7 @@ contract MEVResimulateTest is Test {
         deal(TOKEN_IN, address(this), INPUT_TOKEN_AMOUNT);
         IERC20(TOKEN_IN).approve(address(swapper), INPUT_TOKEN_AMOUNT);
 
-        uint256 v2Out = swapper.swapV2ExactIn(
-            UNISWAP_V2_PAIR,
-            TOKEN_IN,
-            INPUT_TOKEN_AMOUNT,
-            UNISWAP_V2_OUTPUT - 1
-        );
+        uint256 v2Out = swapper.swapV2ExactIn(UNISWAP_V2_PAIR, TOKEN_IN, INPUT_TOKEN_AMOUNT, UNISWAP_V2_OUTPUT - 1);
 
         assertApproxEqAbs(v2Out, UNISWAP_V2_OUTPUT, UNISWAP_V2_OUTPUT / 100, "V2 output should match");
     }
@@ -169,9 +164,9 @@ contract MEVResimulateTest is Test {
         uint256 empReceived = path.executePath(
             INPUT_TOKEN_AMOUNT,
             UNISWAP_V2_PAIR,
-            TOKEN_V2_OUT,  // vault = pfWETH (0x395d)
+            TOKEN_V2_OUT, // vault = pfWETH (0x395d)
             UNISWAP_V3_POOL,
-            WETH_INPUT     // original tx swapped 0.5626 WETH (rest to user)
+            WETH_INPUT // original tx swapped 0.5626 WETH (rest to user)
         );
         uint256 empAfter = IERC20(EMP).balanceOf(address(this));
 
@@ -313,15 +308,7 @@ contract MEVResimulateTest is Test {
 
         vm.prank(MEV_BOT);
         path.executeFullPathWithProfitDebug(
-            INPUT_TOKEN_AMOUNT,
-            UNISWAP_V2_PAIR,
-            TOKEN_V2_OUT,
-            UNISWAP_V3_POOL,
-            TOKEN_IN,
-            EMP,
-            WETH,
-            USER,
-            WETH_INPUT
+            INPUT_TOKEN_AMOUNT, UNISWAP_V2_PAIR, TOKEN_V2_OUT, UNISWAP_V3_POOL, TOKEN_IN, EMP, WETH, USER, WETH_INPUT
         );
     }
 
@@ -340,10 +327,8 @@ contract MEVResimulateTest is Test {
         deal(TOKEN_IN, address(this), INPUT_TOKEN_AMOUNT);
         IERC20(TOKEN_IN).approve(address(path), INPUT_TOKEN_AMOUNT);
 
-        (uint256 r0, uint256 r1, uint256 amountIn, uint256 pfWETHOut) = path.debugV2Swap(
-            INPUT_TOKEN_AMOUNT,
-            UNISWAP_V2_PAIR
-        );
+        (uint256 r0, uint256 r1, uint256 amountIn, uint256 pfWETHOut) =
+            path.debugV2Swap(INPUT_TOKEN_AMOUNT, UNISWAP_V2_PAIR);
 
         // Log for analysis
         emit log_named_uint("r0 (pfWETH reserve)", r0);
@@ -357,7 +342,10 @@ contract MEVResimulateTest is Test {
         emit log_named_uint("amountIn needed for 0.53 output", amountInForOriginal);
 
         // Diff: our amountIn vs needed
-        emit log_named_uint("diff amountIn (ours - needed)", amountIn > amountInForOriginal ? amountIn - amountInForOriginal : amountInForOriginal - amountIn);
+        emit log_named_uint(
+            "diff amountIn (ours - needed)",
+            amountIn > amountInForOriginal ? amountIn - amountInForOriginal : amountInForOriginal - amountIn
+        );
     }
 
     /// Task 7 Option A - TX_HASH fork 与原 tx 相同 state 下执行
@@ -449,13 +437,8 @@ contract MEVResimulateTest is Test {
         deal(TOKEN_IN, address(this), INPUT_TOKEN_AMOUNT);
         IERC20(TOKEN_IN).approve(address(path), INPUT_TOKEN_AMOUNT);
 
-        uint256 empReceived = path.executePath(
-            INPUT_TOKEN_AMOUNT,
-            UNISWAP_V2_PAIR,
-            TOKEN_V2_OUT,
-            UNISWAP_V3_POOL,
-            WETH_INPUT
-        );
+        uint256 empReceived =
+            path.executePath(INPUT_TOKEN_AMOUNT, UNISWAP_V2_PAIR, TOKEN_V2_OUT, UNISWAP_V3_POOL, WETH_INPUT);
 
         assertGt(empReceived, 0.5e18, "Path should yield > 0.5 EMP");
     }

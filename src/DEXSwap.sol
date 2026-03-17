@@ -32,11 +32,7 @@ contract DEXSwap {
      * @param amount0Out output amount for token0 (0 if we're selling token0)
      * @param amount1Out output amount for token1 (0 if we're selling token1)
      */
-    function swapV2(
-        address pair,
-        uint256 amount0Out,
-        uint256 amount1Out
-    ) external {
+    function swapV2(address pair, uint256 amount0Out, uint256 amount1Out) external {
         IUniswapV2Pair(pair).swap(amount0Out, amount1Out, msg.sender, "");
     }
 
@@ -45,12 +41,10 @@ contract DEXSwap {
      * Caller must approve this contract for tokenIn first
      * Handles fee-on-transfer tokens (e.g. pEMP): uses actual balance delta
      */
-    function swapV2ExactIn(
-        address pair,
-        address tokenIn,
-        uint256 amountIn,
-        uint256 amountOutMin
-    ) external returns (uint256 amountOut) {
+    function swapV2ExactIn(address pair, address tokenIn, uint256 amountIn, uint256 amountOutMin)
+        external
+        returns (uint256 amountOut)
+    {
         (uint256 reserve0, uint256 reserve1,) = IUniswapV2Pair(pair).getReserves();
         IERC20(tokenIn).transferFrom(msg.sender, pair, amountIn);
 
@@ -58,9 +52,8 @@ contract DEXSwap {
         address token1 = IUniswapV2Pair(pair).token1();
 
         // Fee-on-transfer: pair receives less than amountIn; use actual balance delta
-        uint256 balanceIn = tokenIn == token0
-            ? IERC20(token0).balanceOf(pair) - reserve0
-            : IERC20(token1).balanceOf(pair) - reserve1;
+        uint256 balanceIn =
+            tokenIn == token0 ? IERC20(token0).balanceOf(pair) - reserve0 : IERC20(token1).balanceOf(pair) - reserve1;
         uint256 amount0Out;
         uint256 amount1Out;
 
@@ -90,19 +83,11 @@ contract DEXSwap {
      * @param amountSpecified POSITIVE for exact input (amount of tokenIn to swap)
      * @param sqrtPriceLimitX96 MAX_SQRT_RATIO-1 when selling token1, MIN_SQRT_RATIO+1 when selling token0
      */
-    function swapV3ExactIn(
-        address pool,
-        bool zeroForOne,
-        int256 amountSpecified,
-        uint160 sqrtPriceLimitX96
-    ) external returns (int256 amount0, int256 amount1) {
-        return IUniswapV3Pool(pool).swap(
-            msg.sender,
-            zeroForOne,
-            amountSpecified,
-            sqrtPriceLimitX96,
-            ""
-        );
+    function swapV3ExactIn(address pool, bool zeroForOne, int256 amountSpecified, uint160 sqrtPriceLimitX96)
+        external
+        returns (int256 amount0, int256 amount1)
+    {
+        return IUniswapV3Pool(pool).swap(msg.sender, zeroForOne, amountSpecified, sqrtPriceLimitX96, "");
     }
 
     /**
@@ -118,14 +103,8 @@ contract DEXSwap {
         IERC20(tokenIn).transferFrom(msg.sender, address(this), amountIn);
         IERC20(tokenIn).approve(pool, amountIn);
 
-        int256 amountSpecified = int256(amountIn);  // POSITIVE = exact input
-        return IUniswapV3Pool(pool).swap(
-            msg.sender,
-            zeroForOne,
-            amountSpecified,
-            sqrtPriceLimitX96,
-            ""
-        );
+        int256 amountSpecified = int256(amountIn); // POSITIVE = exact input
+        return IUniswapV3Pool(pool).swap(msg.sender, zeroForOne, amountSpecified, sqrtPriceLimitX96, "");
     }
 
     /**

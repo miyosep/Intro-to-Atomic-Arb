@@ -6,6 +6,7 @@ import {IUniswapV3Pool} from "./interfaces/IUniswapV3Pool.sol";
 import {IERC20} from "./interfaces/IERC20.sol";
 import {IERC4626} from "./interfaces/IERC4626.sol";
 import {IWETH} from "./interfaces/IWETH.sol";
+
 /**
  * @title ArbitragePath
  * @notice Replicates the full arbitrage path from tx 0x9ede...
@@ -39,13 +40,10 @@ contract ArbitragePath {
      * @param wethAmountForV3 Amount of WETH to swap on V3 (0 = use all from vault).
      *   Original tx swapped 562611020353505727 WETH (0.5626) to get 17.97 EMP; rest went to user.
      */
-    function executePath(
-        uint256 pEMPAmount,
-        address v2Pair,
-        address vault,
-        address v3Pool,
-        uint256 wethAmountForV3
-    ) external returns (uint256 empReceived) {
+    function executePath(uint256 pEMPAmount, address v2Pair, address vault, address v3Pool, uint256 wethAmountForV3)
+        external
+        returns (uint256 empReceived)
+    {
         address pfWETH = IUniswapV2Pair(v2Pair).token0();
         address pEMP = IUniswapV2Pair(v2Pair).token1();
 
@@ -54,7 +52,7 @@ contract ArbitragePath {
         (uint256 r0, uint256 r1,) = IUniswapV2Pair(v2Pair).getReserves();
         IERC20(pEMP).transferFrom(msg.sender, v2Pair, pEMPAmount);
         uint256 balance1 = IERC20(pEMP).balanceOf(v2Pair);
-        uint256 amountIn = balance1 - r1;  // actual amount received by pair
+        uint256 amountIn = balance1 - r1; // actual amount received by pair
         uint256 pfWETHOut = _getAmountOut(amountIn, r1, r0);
         IUniswapV2Pair(v2Pair).swap(pfWETHOut, 0, address(this), "");
 
@@ -65,17 +63,19 @@ contract ArbitragePath {
         // Step 3: Uniswap V3 - WETH -> EMP
         // Pool: token0=EMP, token1=WETH. Sell token1 (WETH) for token0 (EMP) => zeroForOne=false
         // amountSpecified: POSITIVE = exact input (we put in WETH), NEGATIVE = exact output
-        uint256 wethToSwap = wethAmountForV3 == 0 ? wethReceived : (wethAmountForV3 < wethReceived ? wethAmountForV3 : wethReceived);
+        uint256 wethToSwap =
+            wethAmountForV3 == 0 ? wethReceived : (wethAmountForV3 < wethReceived ? wethAmountForV3 : wethReceived);
         address weth = IUniswapV3Pool(v3Pool).token1();
         address emp = IUniswapV3Pool(v3Pool).token0();
         IERC20(weth).approve(v3Pool, wethToSwap);
-        IUniswapV3Pool(v3Pool).swap(
-            msg.sender,
-            false,  // zeroForOne=false: sell token1 (WETH) for token0 (EMP)
-            int256(wethToSwap),  // POSITIVE = exact INPUT of token1 (WETH)
-            1461446703485210103287273052203988822378723970341,  // MAX_SQRT_RATIO - 1 (price goes UP when selling token1)
-            ""
-        );
+        IUniswapV3Pool(v3Pool)
+            .swap(
+                msg.sender,
+                false, // zeroForOne=false: sell token1 (WETH) for token0 (EMP)
+                int256(wethToSwap), // POSITIVE = exact INPUT of token1 (WETH)
+                1461446703485210103287273052203988822378723970341, // MAX_SQRT_RATIO - 1 (price goes UP when selling token1)
+                ""
+            );
         return IERC20(emp).balanceOf(msg.sender);
     }
 
@@ -125,9 +125,11 @@ contract ArbitragePath {
 
         // Step 3: V3 swap
         emit DebugStep(3, "V3: WETH->EMP", wethAmountForV3);
-        uint256 wethToSwap = wethAmountForV3 == 0 ? wethReceived : (wethAmountForV3 < wethReceived ? wethAmountForV3 : wethReceived);
+        uint256 wethToSwap =
+            wethAmountForV3 == 0 ? wethReceived : (wethAmountForV3 < wethReceived ? wethAmountForV3 : wethReceived);
         IERC20(weth).approve(v3Pool, wethToSwap);
-        IUniswapV3Pool(v3Pool).swap(address(this), false, int256(wethToSwap), 1461446703485210103287273052203988822378723970341, "");
+        IUniswapV3Pool(v3Pool)
+            .swap(address(this), false, int256(wethToSwap), 1461446703485210103287273052203988822378723970341, "");
         uint256 empBal = IERC20(empToken).balanceOf(address(this));
         if (empBal == 0) {
             emit DebugStepFail(3, "V3 swap", "EMP output is 0", wethToSwap, 0);
@@ -192,9 +194,11 @@ contract ArbitragePath {
         uint256 wethReceived = IERC4626(vault).redeem(pfWETHOut, address(this), address(this));
 
         // Step 3: V3
-        uint256 wethToSwap = wethAmountForV3 == 0 ? wethReceived : (wethAmountForV3 < wethReceived ? wethAmountForV3 : wethReceived);
+        uint256 wethToSwap =
+            wethAmountForV3 == 0 ? wethReceived : (wethAmountForV3 < wethReceived ? wethAmountForV3 : wethReceived);
         IERC20(weth).approve(v3Pool, wethToSwap);
-        IUniswapV3Pool(v3Pool).swap(address(this), false, int256(wethToSwap), 1461446703485210103287273052203988822378723970341, "");
+        IUniswapV3Pool(v3Pool)
+            .swap(address(this), false, int256(wethToSwap), 1461446703485210103287273052203988822378723970341, "");
 
         // Step 4: Bond
         uint256 empBal = IERC20(empToken).balanceOf(address(this));
@@ -243,9 +247,7 @@ contract ArbitragePath {
         // Step 1: V2
         (uint256 r0, uint256 r1,) = IUniswapV2Pair(v2Pair).getReserves();
         IERC20(IUniswapV2Pair(v2Pair).token1()).transferFrom(msg.sender, v2Pair, pEMPAmount);
-        uint256 pfWETHOut = _getAmountOut(
-            IERC20(IUniswapV2Pair(v2Pair).token1()).balanceOf(v2Pair) - r1, r1, r0
-        );
+        uint256 pfWETHOut = _getAmountOut(IERC20(IUniswapV2Pair(v2Pair).token1()).balanceOf(v2Pair) - r1, r1, r0);
         IUniswapV2Pair(v2Pair).swap(pfWETHOut, 0, address(this), "");
 
         // Step 2: Vault
@@ -254,9 +256,11 @@ contract ArbitragePath {
 
         // Step 3: V3 - POSITIVE amountSpecified = exact input of token1 (WETH)
         // Swap up to wethAmountForV3 (or all if 0). Remainder goes to user.
-        uint256 wethToSwap = wethAmountForV3 == 0 ? wethReceived : (wethAmountForV3 < wethReceived ? wethAmountForV3 : wethReceived);
+        uint256 wethToSwap =
+            wethAmountForV3 == 0 ? wethReceived : (wethAmountForV3 < wethReceived ? wethAmountForV3 : wethReceived);
         IERC20(weth).approve(v3Pool, wethToSwap);
-        IUniswapV3Pool(v3Pool).swap(address(this), false, int256(wethToSwap), 1461446703485210103287273052203988822378723970341, "");
+        IUniswapV3Pool(v3Pool)
+            .swap(address(this), false, int256(wethToSwap), 1461446703485210103287273052203988822378723970341, "");
 
         // Step 4: Bond (EMP -> pEMP). Must succeed - original tx reverts if bond fails
         // Peapod WeightedIndex: bond(address _token, uint256 _amount, uint256 _amountMintMin) = 0xb08d0333
@@ -286,10 +290,10 @@ contract ArbitragePath {
     }
 
     /// Debug: returns (r0, r1, amountIn, pfWETHOut) for V2 swap analysis. Performs transfer (state-changing).
-    function debugV2Swap(
-        uint256 pEMPAmount,
-        address v2Pair
-    ) external returns (uint256 r0, uint256 r1, uint256 amountIn, uint256 pfWETHOut) {
+    function debugV2Swap(uint256 pEMPAmount, address v2Pair)
+        external
+        returns (uint256 r0, uint256 r1, uint256 amountIn, uint256 pfWETHOut)
+    {
         address pEMP = IUniswapV2Pair(v2Pair).token1();
         (r0, r1,) = IUniswapV2Pair(v2Pair).getReserves();
         IERC20(pEMP).transferFrom(msg.sender, v2Pair, pEMPAmount);

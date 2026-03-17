@@ -15,7 +15,7 @@ import {IWETH} from "./interfaces/IWETH.sol";
  */
 contract ArbitragePathFlashSwap {
     address public recipient;
-    uint256 public userAmount;      // 原 tx: 发给 User 的精确 wei
+    uint256 public userAmount; // 原 tx: 发给 User 的精确 wei
     address public builderNet;
     uint256 public builderNetAmount;
     address public v2Pair;
@@ -57,9 +57,11 @@ contract ArbitragePathFlashSwap {
         uint256 wethReceived = IERC4626(vault).redeem(borrowed, address(this), address(this));
 
         // 2) V3: WETH -> EMP
-        uint256 wethToSwap = wethAmountForV3 == 0 ? wethReceived : (wethAmountForV3 < wethReceived ? wethAmountForV3 : wethReceived);
+        uint256 wethToSwap =
+            wethAmountForV3 == 0 ? wethReceived : (wethAmountForV3 < wethReceived ? wethAmountForV3 : wethReceived);
         IERC20(weth).approve(v3Pool, wethToSwap);
-        IUniswapV3Pool(v3Pool).swap(address(this), false, int256(wethToSwap), 1461446703485210103287273052203988822378723970341, "");
+        IUniswapV3Pool(v3Pool)
+            .swap(address(this), false, int256(wethToSwap), 1461446703485210103287273052203988822378723970341, "");
 
         // 3) Bond: EMP -> pEMP
         uint256 empBal = IERC20(empToken).balanceOf(address(this));
@@ -88,8 +90,9 @@ contract ArbitragePathFlashSwap {
         uint256 rem = IERC20(weth).balanceOf(address(this));
         if (rem > 0) {
             IWETH(weth).withdraw(rem);
-            (uint256 _userAmount, address _builderNet, uint256 _builderNetAmount) =
-                data.length >= 96 ? abi.decode(data, (uint256, address, uint256)) : (userAmount, builderNet, builderNetAmount);
+            (uint256 _userAmount, address _builderNet, uint256 _builderNetAmount) = data.length >= 96
+                ? abi.decode(data, (uint256, address, uint256))
+                : (userAmount, builderNet, builderNetAmount);
             uint256 toUser = _userAmount > 0 ? _userAmount : (rem - _builderNetAmount);
             uint256 toBuilderNet = (_builderNet != address(0) && _builderNetAmount > 0) ? _builderNetAmount : 0;
             require(rem >= toUser + toBuilderNet, "insufficient remainder");
@@ -138,7 +141,8 @@ contract ArbitragePathFlashSwap {
         pfWETHBorrowed = pfWETHToBorrow;
 
         // Trigger flash swap: borrow pfWETH (token0), pass userAmount/builderNet via data for callback
-        IUniswapV2Pair(_v2Pair).swap(pfWETHToBorrow, 0, address(this), abi.encode(_userAmount, _builderNet, _builderNetAmount));
+        IUniswapV2Pair(_v2Pair)
+            .swap(pfWETHToBorrow, 0, address(this), abi.encode(_userAmount, _builderNet, _builderNetAmount));
 
         return recipient.balance;
     }
