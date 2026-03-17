@@ -2,7 +2,10 @@
 src = "src"
 out = "out"
 libs = ["lib"]
-# Optional: set MAINNET_RPC_URL for fork tests
-# rpc_endpoints = { mainnet = "${MAINNET_RPC_URL}" }
+via_ir = true
+optimizer = true
+optimizer_runs = 200
+# Fork tests: set MAINNET_RPC_URL, then: forge test --match-test test_QuickVerify
+# fork_block_number = 23042800  # block of target MEV tx (uncomment to pin)
 
 # See more config options https://github.com/foundry-rs/foundry/blob/master/crates/config/README.md#all-options
