@@ -9,16 +9,10 @@ import {IWETH} from "./interfaces/IWETH.sol";
 
 /**
  * @title ArbitragePath
- * @notice Replicates the full arbitrage path from tx 0x9ede...
+ * @notice Legacy path: Uniswap V2 first (pEMP->pfWETH), then Vault, V3, Bond — order differs from on-chain tx trace.
+ *         Prefer ArbitragePathTraceOrder for trace-faithful re-simulation.
  *
- * Protocols used:
- * 1. Uniswap V2 - pEMP/pfWETH pair
- * 2. Peapod/Primitive Vault (0x395d) - redeem pfWETH -> WETH
- * 3. Uniswap V3 - WETH/EMP pool
- * 4. Peapod Bond (0x4343) - EMP -> pEMP
- *
- * Path: pEMP -> [V2] -> pfWETH -> [Vault] -> WETH -> [V3] -> EMP -> [Bond] -> pEMP
- * Profit: remaining WETH unwrapped to ETH, sent to user (~0.00643 ETH)
+ * Protocols: Uniswap V2, Peapod Vault (0x395d), Uniswap V3, Peapod Bond (0x4343).
  */
 contract ArbitragePath {
     // Uniswap V3 swap callback - signature must match (int256, int256, bytes)

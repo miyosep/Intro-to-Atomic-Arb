@@ -9,8 +9,8 @@ import {IWETH} from "./interfaces/IWETH.sol";
 
 /**
  * @title ArbitragePathFlashSwap
- * @notice Option A: Uniswap V2 flash swap of pfWETH
- * Path: Flash borrow pfWETH -> Vault redeem -> V3 (WETH->EMP) -> Bond (EMP->pEMP) -> V2 (pEMP->pfWETH) -> Repay
+ * @notice Optional: V2 flash swap wrapper — inner steps match trace (Vault->V3->Bond->V2 repay); outer call differs from live tx.
+ * Path: Flash borrow pfWETH -> Vault redeem -> V3 (WETH->EMP) -> Bond (EMP->pEMP) -> V2 repay pEMP
  * Profit: remainder WETH -> ETH to user (~0.00643)
  */
 contract ArbitragePathFlashSwap {

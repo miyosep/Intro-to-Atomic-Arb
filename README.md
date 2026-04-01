@@ -1,24 +1,28 @@
 # MEV 原子套利 Tx Re-simulation
 
-给定原子套利 tx，在 Foundry fork 下 re-simulate，复刻套利路径，得到与原 tx 一致的 profit。
+给定原子套利 tx，在 Foundry fork 下 re-simulate，按 **链上 call trace 的内层顺序** 复刻交互，得到与原 tx 一致的套利 profit。
 
 **目标 Tx**: [0x9edea0b66aece76f0bc7e185f9ce5cac81ce41bdd1ec4d3cf1907274bc8aa730](https://etherscan.io/tx/0x9edea0b66aece76f0bc7e185f9ce5cac81ce41bdd1ec4d3cf1907274bc8aa730)  
-**Block**: 23042800 | **Position**: 182
+**Block**: 23042800 | **Position**: 182  
+**Tx.value**: 0 ETH（用户仅支付 gas）
 
 ## Re-simulate
 
 1. **Fork**: 用 `vm.createSelectFork(rpcUrl, txHash)` 在 tx 所在区块 fork，replay 该 tx 之前的所有交易，得到与原 tx 执行前完全相同的链上 state。
-2. **执行**: 用合约 `ArbitragePathFlashSwap` 执行相同路径（Flash borrow pfWETH → Vault → V3 → Bond → V2 repay）。
-3. **验证**: 比较 User、BuilderNet 收到的 ETH 与原 tx 一致。
+2. **执行**: 用合约 [`ArbitragePathTraceOrder.sol`](src/ArbitragePathTraceOrder.sol) 按 trace 顺序调用：**Vault redeem (pfWETH→WETH) → Uniswap V3 (WETH→EMP) → Peapod Bond (EMP→pEMP) → Uniswap V2 (pEMP→pfWETH)**，最后将剩余 WETH unwrap 分给 User / BuilderNet。测试里用 `deal` 注入与 flash 借入量相同的 vault shares，等价于原 tx 在 V2 flash 回调内的资金需求。
+3. **验证**: `vm.transact(txHash)` 与上述路径对比 User、BuilderNet 收到的 ETH（见 `test_Verify_TxHashFork_OriginalVsOurPath`）。
 
-## 套利路径
+## 套利路径（token 为节点，pool 为边）
+
+闭包上的协议与顺序（**内层执行**，与 Etherscan 事件顺序一致）：
 
 ```
-Flash borrow pfWETH (V2) → Vault redeem → V3 (WETH→EMP) → Bond (EMP→pEMP) → V2 repay
-Profit: User ~0.00643 ETH, BuilderNet ~0.00059 ETH
+pfWETH --[Vault redeem]--> WETH --[Uniswap V3]--> EMP --[Bond]--> pEMP --[Uniswap V2]--> pfWETH
 ```
 
-涉及协议：Uniswap V2 (0x9FF3), Peapod Vault (0x395d), Uniswap V3 (0xe092), Peapod Bond (0x4343)。
+原 tx 在 **最外层** 还会先对 Uniswap V2 调 `swap` 触发 flash；回调内执行与上表相同的 DeFi 步骤。可选对照实现：[`ArbitragePathFlashSwap.sol`](src/ArbitragePathFlashSwap.sol)（V2 flash 包装）及 `test_OptionFlashSwap_EquivalentProfit`。
+
+涉及协议：Uniswap V2 (`0x9FF3…`), Peapod Vault (`0x395d…`), Uniswap V3 (`0xe092…`), Peapod Bond / pEMP (`0x4343…`)。
 
 ## 如何运行
 
@@ -27,20 +31,23 @@ Profit: User ~0.00643 ETH, BuilderNet ~0.00059 ETH
 ```powershell
 $env:MAINNET_RPC_URL = "https://eth-mainnet.g.alchemy.com/v2/YOUR_KEY"
 
-# 完整验证 (原 tx vs 我们的路径)
+# 完整验证 (原 tx vs trace-order 路径)
 forge test --match-test test_Verify_TxHashFork_OriginalVsOurPath -vvv
 
-# 仅 replay 原 tx ~20min
+# 仅 replay 原 tx
 forge test --match-test test_ResimulateTxWithFork -vvv
+```
 
 ## 相关测试
 
 | 测试 | 作用 |
 |------|------|
-| `test_Verify_TxHashFork_OriginalVsOurPath` | 完整验证，输出与原 tx 一致 |
+| `test_Verify_TxHashFork_OriginalVsOurPath` | 原 tx 与 `ArbitragePathTraceOrder` 分账一致 |
 | `test_ResimulateTxWithFork` | 直接 replay 原 tx |
-| `test_Task7_FullPathWithProfit` | 我们的路径执行 |
-| `test_QuickVerify_FlashSwap` | 快速验证 |
+| `test_Task7_FullPathWithProfit` | 全路径 + 利润 |
+| `test_Task7_FullArbitragePath` | Vault+V3 后 EMP 数量与原 tx 一致 |
+| `test_QuickVerify_TraceOrder` | 区块头 state 快速冒烟（金额可能略异于 #182） |
+| `test_OptionFlashSwap_EquivalentProfit` | 可选：V2 flash 等价路径 |
 
 ## Foundry API
 
@@ -60,16 +67,15 @@ forge test --match-test test_ResimulateTxWithFork -vvv
 ## 调试
 
 ```powershell
-# 查看原 tx call trace
 forge test --match-test test_TraceOriginalTx -vvvv
-
-# 逐步调试路径失败位置
 forge test --match-test test_DebugPathStepByStep -vvvv
 ```
 
 ## 项目结构
 
 ```
-src/ArbitragePathFlashSwap.sol   # Re-simulate 使用的合约
-test/MEVResimulate.t.sol         # Fork + Re-simulate 测试
+src/ArbitragePathTraceOrder.sol   # Trace 顺序复刻（主路径）
+src/ArbitragePathFlashSwap.sol    # V2 flash 包装（可选对照）
+src/ArbitragePath.sol             # 旧版 V2-first 分步（遗留/调试）
+test/MEVResimulate.t.sol          # Fork + Re-simulate 测试
 ```

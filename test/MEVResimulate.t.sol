@@ -5,6 +5,7 @@ import {Test} from "forge-std/Test.sol";
 import {DEXSwap} from "../src/DEXSwap.sol";
 import {ArbitragePath} from "../src/ArbitragePath.sol";
 import {ArbitragePathFlashSwap} from "../src/ArbitragePathFlashSwap.sol";
+import {ArbitragePathTraceOrder} from "../src/ArbitragePathTraceOrder.sol";
 import {IERC20} from "../src/interfaces/IERC20.sol";
 import {IUniswapV2Pair} from "../src/interfaces/IUniswapV2Pair.sol";
 
@@ -15,7 +16,8 @@ import {IUniswapV2Pair} from "../src/interfaces/IUniswapV2Pair.sol";
  * Target tx: 0x9edea0b66aece76f0bc7e185f9ce5cac81ce41bdd1ec4d3cf1907274bc8aa730
  * Block: 23042800, Position: 182
  *
- * Flow: Uniswap V2 (17.17 tokenA -> 0.53 tokenB) -> Vault redeem -> Uniswap V3 (0.56 WETH -> 17.97 EMP)
+ * On-chain inner order (tx trace): Vault redeem -> Uniswap V3 -> Bond -> Uniswap V2 (pEMP->pfWETH).
+ * Live tx wraps this in V2 flash swap first; re-sim uses ArbitragePathTraceOrder + deal vault shares.
  */
 contract MEVResimulateTest is Test {
     bytes32 constant TX_HASH = 0x9edea0b66aece76f0bc7e185f9ce5cac81ce41bdd1ec4d3cf1907274bc8aa730;
@@ -111,6 +113,11 @@ contract MEVResimulateTest is Test {
     uint256 constant USER_NET = 5969877670159834; // User net (gross - gas, vm.transact 时 balance delta)
     uint256 constant BUILDERNET_AMOUNT = 593974446933372; // 原 tx: BuilderNet 收到 0.000593974446933372 ETH
 
+    /// @dev Vault ERC4626 share token = pair token0; same address as TOKEN_V2_OUT
+    function _fundVaultSharesForTrace(address path, uint256 shareAmount) internal {
+        deal(TOKEN_V2_OUT, path, shareAmount);
+    }
+
     /**
      * Task 7: Verify replayed tx produces same output
      * vm.transact replays the exact tx - output must match
@@ -130,8 +137,7 @@ contract MEVResimulateTest is Test {
     }
 
     /**
-     * Task 7: Manual re-simulate - same input, same DEX pools, verify output
-     * Uses DEXSwap for V2 only (partial path)
+     * Partial leg: Uniswap V2 pEMP->pfWETH only (closing edge of the cycle; full trace uses ArbitragePathTraceOrder)
      */
     function test_Task7_ManualResimulateWithDEXContract() public {
         string memory rpcUrl = vm.envOr("MAINNET_RPC_URL", string("https://eth.llamarpc.com"));
@@ -155,38 +161,27 @@ contract MEVResimulateTest is Test {
         string memory rpcUrl = vm.envOr("MAINNET_RPC_URL", string("https://eth.llamarpc.com"));
         vm.createSelectFork(rpcUrl, TX_HASH);
 
-        ArbitragePath path = new ArbitragePath();
+        ArbitragePathTraceOrder path = new ArbitragePathTraceOrder();
+        _fundVaultSharesForTrace(address(path), UNISWAP_V2_OUTPUT);
 
-        deal(TOKEN_IN, address(this), INPUT_TOKEN_AMOUNT);
-        IERC20(TOKEN_IN).approve(address(path), INPUT_TOKEN_AMOUNT);
-
-        uint256 empBefore = IERC20(EMP).balanceOf(address(this));
-        uint256 empReceived = path.executePath(
-            INPUT_TOKEN_AMOUNT,
-            UNISWAP_V2_PAIR,
-            TOKEN_V2_OUT, // vault = pfWETH (0x395d)
-            UNISWAP_V3_POOL,
-            WETH_INPUT // original tx swapped 0.5626 WETH (rest to user)
+        uint256 empReceived = path.executeVaultRedeemThenV3(
+            UNISWAP_V2_PAIR, TOKEN_V2_OUT, UNISWAP_V3_POOL, WETH, UNISWAP_V2_OUTPUT, WETH_INPUT
         );
-        uint256 empAfter = IERC20(EMP).balanceOf(address(this));
 
-        // Requirement: output token amountOut must match original tx
-        assertApproxEqAbs(empReceived, EMP_OUTPUT, EMP_OUTPUT / 100, "EMP output should match original tx");
-        assertEq(empReceived, empAfter - empBefore, "Balance delta should equal returned amount");
+        assertEq(empReceived, EMP_OUTPUT, "EMP after Vault+V3 must match original tx");
     }
 
-    /// Task 7: Full path WITH Bond + User ETH profit (~0.00643 ETH)
-    /// Option A: Uniswap V2 flash swap of pfWETH - no deal/transferFrom, same path as original
-    /// Requires: MAINNET_RPC_URL with archive support
+    /// Task 7: Full path — trace order (Vault -> V3 -> Bond -> V2) + User/BuilderNet ETH
     function test_Task7_FullPathWithProfit() public {
         string memory rpcUrl = vm.envOr("MAINNET_RPC_URL", string("https://eth.llamarpc.com"));
         vm.createSelectFork(rpcUrl, TX_HASH);
 
-        ArbitragePathFlashSwap path = new ArbitragePathFlashSwap();
+        ArbitragePathTraceOrder path = new ArbitragePathTraceOrder();
+        _fundVaultSharesForTrace(address(path), UNISWAP_V2_OUTPUT);
 
         uint256 userEthBefore = USER.balance;
 
-        path.executeFullPathWithFlashSwap(
+        path.executeTraceOrder(
             UNISWAP_V2_PAIR,
             TOKEN_V2_OUT,
             UNISWAP_V3_POOL,
@@ -194,8 +189,8 @@ contract MEVResimulateTest is Test {
             EMP,
             WETH,
             USER,
-            WETH_INPUT,
             UNISWAP_V2_OUTPUT,
+            WETH_INPUT,
             USER_AMOUNT,
             BUILDERNET,
             BUILDERNET_AMOUNT
@@ -203,35 +198,30 @@ contract MEVResimulateTest is Test {
 
         uint256 userEthAfter = USER.balance;
 
-        // 原 tx: User 5969877670159834, BuilderNet 593974446933372
         assertEq(userEthAfter - userEthBefore, USER_AMOUNT, "User ETH should match original tx");
     }
 
     /// 原 tx gas 费用 (Etherscan: 0.000465431278568012 ETH)。User 为 tx 签名者故支付。
     uint256 constant TX_GAS_WEI = 465431278568012;
 
-    /// Verify: TX_HASH fork 时原 tx vs 我们的路径直接比较
-    /// Option A: Flash swap - 相同 input/DEX，满足要求
-    /// 原 tx: User 0.00643 ETH, BuilderNet 0.000594 ETH。User 接收额比较。
-    /// 需 Alchemy 等 archive RPC。
+    /// Verify: TX_HASH fork — vm.transact vs trace-order path (ArbitragePathTraceOrder)
     function test_Verify_TxHashFork_OriginalVsOurPath() public {
         string memory rpcUrl = vm.envOr("MAINNET_RPC_URL", string("https://eth.llamarpc.com"));
         vm.createSelectFork(rpcUrl, TX_HASH);
 
-        // 1) 原 tx replay -> User balance delta (User 收到的 ETH)
         uint256 userEthBefore = USER.balance;
         uint256 builderNetBefore = BUILDERNET.balance;
         vm.transact(TX_HASH);
         uint256 ethFromOriginalUser = USER.balance - userEthBefore;
         uint256 ethFromOriginalBuilderNet = BUILDERNET.balance - builderNetBefore;
 
-        // 2) 相同 pre-tx state 下执行我们的路径 (Option A: flash swap)
         vm.createSelectFork(rpcUrl, TX_HASH);
-        ArbitragePathFlashSwap path = new ArbitragePathFlashSwap();
+        ArbitragePathTraceOrder path = new ArbitragePathTraceOrder();
+        _fundVaultSharesForTrace(address(path), UNISWAP_V2_OUTPUT);
 
         uint256 userEthBefore2 = USER.balance;
         uint256 builderNetBefore2 = BUILDERNET.balance;
-        path.executeFullPathWithFlashSwap(
+        path.executeTraceOrder(
             UNISWAP_V2_PAIR,
             TOKEN_V2_OUT,
             UNISWAP_V3_POOL,
@@ -239,8 +229,8 @@ contract MEVResimulateTest is Test {
             EMP,
             WETH,
             USER,
-            WETH_INPUT,
             UNISWAP_V2_OUTPUT,
+            WETH_INPUT,
             USER_AMOUNT,
             BUILDERNET,
             BUILDERNET_AMOUNT
@@ -253,16 +243,41 @@ contract MEVResimulateTest is Test {
         emit log_named_uint("Original (BuilderNet)", ethFromOriginalBuilderNet);
         emit log_named_uint("Ours (BuilderNet)", ethFromOursBuilderNet);
 
-        // User: 原 gross = net + gas。我们的路径发送 gross (无 gas)
         assertEq(ethFromOursUser, ethFromOriginalUser + TX_GAS_WEI, "Our path User gross should match original");
         assertEq(ethFromOursBuilderNet, ethFromOriginalBuilderNet, "Our path BuilderNet amount should match original");
     }
 
-    /// 快速验证: 仅用 BLOCK_NUMBER fork (无 TX_HASH replay)。~10s vs ~60s。
-    /// 仅确认路径可执行。精确金额比较用 test_Verify_TxHashFork_OriginalVsOurPath。
-    function test_QuickVerify_FlashSwap() public {
+    /// Quick check at block start (may differ from tx #182 state). Trace-order path.
+    function test_QuickVerify_TraceOrder() public {
         string memory rpcUrl = vm.envOr("MAINNET_RPC_URL", string("https://eth.llamarpc.com"));
         vm.createSelectFork(rpcUrl, BLOCK_NUMBER);
+
+        ArbitragePathTraceOrder path = new ArbitragePathTraceOrder();
+        _fundVaultSharesForTrace(address(path), UNISWAP_V2_OUTPUT);
+        uint256 userEthBefore = USER.balance;
+
+        path.executeTraceOrder(
+            UNISWAP_V2_PAIR,
+            TOKEN_V2_OUT,
+            UNISWAP_V3_POOL,
+            TOKEN_IN,
+            EMP,
+            WETH,
+            USER,
+            UNISWAP_V2_OUTPUT,
+            WETH_INPUT,
+            USER_AMOUNT,
+            BUILDERNET,
+            BUILDERNET_AMOUNT
+        );
+
+        assertGt(USER.balance, userEthBefore, "User should receive ETH");
+    }
+
+    /// Optional: V2 flash wrapper — economically similar, different call wrapper than live tx
+    function test_OptionFlashSwap_EquivalentProfit() public {
+        string memory rpcUrl = vm.envOr("MAINNET_RPC_URL", string("https://eth.llamarpc.com"));
+        vm.createSelectFork(rpcUrl, TX_HASH);
 
         ArbitragePathFlashSwap path = new ArbitragePathFlashSwap();
         uint256 userEthBefore = USER.balance;
@@ -282,7 +297,7 @@ contract MEVResimulateTest is Test {
             BUILDERNET_AMOUNT
         );
 
-        assertGt(USER.balance, userEthBefore, "User should receive ETH");
+        assertEq(USER.balance - userEthBefore, USER_AMOUNT, "Flash path User ETH");
     }
 
     /// 原 tx 结构追踪: vm.transact replay 后查看 trace
@@ -294,21 +309,27 @@ contract MEVResimulateTest is Test {
         vm.transact(TX_HASH);
     }
 
-    /// Step-by-step 调试: 明确输出在何阶段、为何失败
-    /// 运行: forge test --match-test test_DebugPathStepByStep -vvvv
-    /// 失败时输出 "Step N (名称): 原因 (have: X, need: Y)"
+    /// Debug: run trace-order path on TX_HASH fork (-vvvv on failure)
     function test_DebugPathStepByStep() public {
         string memory rpcUrl = vm.envOr("MAINNET_RPC_URL", string("https://eth.llamarpc.com"));
         vm.createSelectFork(rpcUrl, TX_HASH);
 
-        ArbitragePath path = new ArbitragePath();
-        deal(TOKEN_IN, MEV_BOT, INPUT_TOKEN_AMOUNT);
-        vm.prank(MEV_BOT);
-        IERC20(TOKEN_IN).approve(address(path), INPUT_TOKEN_AMOUNT);
+        ArbitragePathTraceOrder path = new ArbitragePathTraceOrder();
+        _fundVaultSharesForTrace(address(path), UNISWAP_V2_OUTPUT);
 
-        vm.prank(MEV_BOT);
-        path.executeFullPathWithProfitDebug(
-            INPUT_TOKEN_AMOUNT, UNISWAP_V2_PAIR, TOKEN_V2_OUT, UNISWAP_V3_POOL, TOKEN_IN, EMP, WETH, USER, WETH_INPUT
+        path.executeTraceOrder(
+            UNISWAP_V2_PAIR,
+            TOKEN_V2_OUT,
+            UNISWAP_V3_POOL,
+            TOKEN_IN,
+            EMP,
+            WETH,
+            USER,
+            UNISWAP_V2_OUTPUT,
+            WETH_INPUT,
+            USER_AMOUNT,
+            BUILDERNET,
+            BUILDERNET_AMOUNT
         );
     }
 
@@ -348,16 +369,16 @@ contract MEVResimulateTest is Test {
         );
     }
 
-    /// Task 7 Option A - TX_HASH fork 与原 tx 相同 state 下执行
-    /// BLOCK_NUMBER fork 因 pool state 不同 UniswapV2:K 失败 → 使用 TX_HASH (需 archive RPC)
+    /// TX_HASH fork + trace-order full path (exact pre-tx reserves)
     function test_Task7_FullPathWithProfit_BlockStart() public {
         string memory rpcUrl = vm.envOr("MAINNET_RPC_URL", string("https://eth.llamarpc.com"));
         vm.createSelectFork(rpcUrl, TX_HASH);
 
-        ArbitragePathFlashSwap path = new ArbitragePathFlashSwap();
+        ArbitragePathTraceOrder path = new ArbitragePathTraceOrder();
+        _fundVaultSharesForTrace(address(path), UNISWAP_V2_OUTPUT);
 
         uint256 userEthBefore = USER.balance;
-        path.executeFullPathWithFlashSwap(
+        path.executeTraceOrder(
             UNISWAP_V2_PAIR,
             TOKEN_V2_OUT,
             UNISWAP_V3_POOL,
@@ -365,8 +386,8 @@ contract MEVResimulateTest is Test {
             EMP,
             WETH,
             USER,
-            WETH_INPUT,
             UNISWAP_V2_OUTPUT,
+            WETH_INPUT,
             USER_AMOUNT,
             BUILDERNET,
             BUILDERNET_AMOUNT
@@ -376,69 +397,17 @@ contract MEVResimulateTest is Test {
         assertEq(userEthAfter - userEthBefore, USER_AMOUNT, "User should receive original amount");
     }
 
-    /// Option C: Deal-to-pair re-simulation - TX_HASH fork, deal pEMP to pair, sync, execute
-    /// 原 tx 相同 User/BuilderNet 金额验证。需 Archive RPC。
-    function test_Verify_TxHashFork_DealToPair() public {
-        string memory rpcUrl = vm.envOr("MAINNET_RPC_URL", string("https://eth.llamarpc.com"));
-        vm.createSelectFork(rpcUrl, TX_HASH);
-
-        // 1) 原 tx replay -> 基准值
-        uint256 userEthBefore = USER.balance;
-        uint256 builderNetBefore = BUILDERNET.balance;
-        vm.transact(TX_HASH);
-        uint256 ethFromOriginalUser = USER.balance - userEthBefore;
-        uint256 ethFromOriginalBuilderNet = BUILDERNET.balance - builderNetBefore;
-
-        // 2) 相同 pre-tx state 下执行 deal-to-pair 路径
-        vm.createSelectFork(rpcUrl, TX_HASH);
-        ArbitragePath path = new ArbitragePath();
-
-        (uint112 r0, uint112 r1,) = IUniswapV2Pair(UNISWAP_V2_PAIR).getReserves();
-        // amountIn for UNISWAP_V2_OUTPUT: amountIn = out * r1 * 1000 / (997 * (r0 - out)) + 1
-        uint256 amountIn = (uint256(UNISWAP_V2_OUTPUT) * r1 * 1000) / (997 * (r0 - UNISWAP_V2_OUTPUT)) + 1;
-        deal(TOKEN_IN, UNISWAP_V2_PAIR, uint256(r1) + amountIn);
-        IUniswapV2Pair(UNISWAP_V2_PAIR).sync();
-
-        uint256 userEthBefore2 = USER.balance;
-        uint256 builderNetBefore2 = BUILDERNET.balance;
-        path.executeFullPathWithProfitDealToPair(
-            UNISWAP_V2_OUTPUT,
-            UNISWAP_V2_PAIR,
-            TOKEN_V2_OUT,
-            UNISWAP_V3_POOL,
-            TOKEN_IN,
-            EMP,
-            WETH,
-            USER,
-            WETH_INPUT,
-            USER_AMOUNT,
-            BUILDERNET,
-            BUILDERNET_AMOUNT
-        );
-        uint256 ethFromOursUser = USER.balance - userEthBefore2;
-        uint256 ethFromOursBuilderNet = BUILDERNET.balance - builderNetBefore2;
-
-        emit log_named_uint("Original (User)", ethFromOriginalUser);
-        emit log_named_uint("DealToPair (User)", ethFromOursUser);
-        emit log_named_uint("Original (BuilderNet)", ethFromOriginalBuilderNet);
-        emit log_named_uint("DealToPair (BuilderNet)", ethFromOursBuilderNet);
-
-        assertEq(ethFromOursUser, ethFromOriginalUser + TX_GAS_WEI, "DealToPair User gross should match original");
-        assertEq(ethFromOursBuilderNet, ethFromOriginalBuilderNet, "DealToPair BuilderNet amount should match original");
-    }
-
-    /// Same path with BLOCK_NUMBER fork (block-start state). Use when archive RPC unavailable.
-    /// Output differs from original (tx was #182 in block) but path executes correctly.
+    /// Vault+V3 only at block start (reserves differ from tx index 182)
     function test_Task7_FullArbitragePath_BlockStart() public {
         string memory rpcUrl = vm.envOr("MAINNET_RPC_URL", string("https://eth.llamarpc.com"));
         vm.createSelectFork(rpcUrl, BLOCK_NUMBER);
 
-        ArbitragePath path = new ArbitragePath();
-        deal(TOKEN_IN, address(this), INPUT_TOKEN_AMOUNT);
-        IERC20(TOKEN_IN).approve(address(path), INPUT_TOKEN_AMOUNT);
+        ArbitragePathTraceOrder path = new ArbitragePathTraceOrder();
+        _fundVaultSharesForTrace(address(path), UNISWAP_V2_OUTPUT);
 
-        uint256 empReceived =
-            path.executePath(INPUT_TOKEN_AMOUNT, UNISWAP_V2_PAIR, TOKEN_V2_OUT, UNISWAP_V3_POOL, WETH_INPUT);
+        uint256 empReceived = path.executeVaultRedeemThenV3(
+            UNISWAP_V2_PAIR, TOKEN_V2_OUT, UNISWAP_V3_POOL, WETH, UNISWAP_V2_OUTPUT, WETH_INPUT
+        );
 
         assertGt(empReceived, 0.5e18, "Path should yield > 0.5 EMP");
     }
